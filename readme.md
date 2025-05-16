@@ -13,7 +13,7 @@ A custom Home Assistant integration for controlling Dahua PTZ cameras via RPC pr
 - ⚡ Asynchronous API calls
 - 🔧 Configurable via UI or YAML
 - 🔄 Integration restart without HA reboot
-- 🛠️ Multiple camera support
+- 🛠️ Multiple camera support See [future_updates.md](future_updates.md)
 - 📊 Detailed logging
 
 ## Installation
