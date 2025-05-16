@@ -1,0 +1,11 @@
+{
+  "domain": "dahua_ptz",
+  "name": "Dahua PTZ Camera Control",
+  "documentation": "https://github.com/markovrv/dahua_ptz",
+  "requirements": ["aiohttp>=3.7.4", "async_timeout>=3.0.1"],
+  "dependencies": [],
+  "codeowners": ["@markovrv"],
+  "version": "1.0.0",
+  "iot_class": "local_polling",
+  "config_flow": true
+}
