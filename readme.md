@@ -1,8 +1,8 @@
 # Dahua PTZ Camera Integration for Home Assistant
 
-![Home Assistant](https://img.shields.io/badge/Home_Assistant-2023.12-blue?logo=home-assistant&logoColor=white)
+![Home Assistant](https://img.shields.io/badge/Home_Assistant-2025.5-blue?logo=home-assistant&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.9+-blue?logo=python&logoColor=white)
-![License](https://img.shields.io/github/license/markovrv/dahua-ptz-ha)
+![License](https://img.shields.io/github/license/markovrv/dahua_ptz)
 
 A custom Home Assistant integration for controlling Dahua PTZ cameras via RPC protocol with advanced features and automation support.
 
@@ -32,7 +32,7 @@ A custom Home Assistant integration for controlling Dahua PTZ cameras via RPC pr
 
 ```bash
 cd /config/custom_components
-git clone https://github.com/markovrv/dahua-ptz-ha.git dahua_ptz
+git clone https://github.com/markovrv/dahua_ptz.git dahua_ptz
 ```
 
 ## Configuration
@@ -140,7 +140,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-For support and feature requests, please [open an issue](https://github.com/markovrv/dahua-ptz-ha/issues).
+For support and feature requests, please [open an issue](https://github.com/markovrv/dahua_ptz/issues).
 
 ---
 
