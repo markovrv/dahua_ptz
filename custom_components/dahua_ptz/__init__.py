@@ -1,124 +1,177 @@
+"""Интеграция Dahua PTZ для Home Assistant.
+
+Управляет камерой через dahua_ptz_cli.py (subprocess).
+"""
+
 import logging
+import os
 import voluptuous as vol
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.typing import ConfigType
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .dahua_rpc import DahuaRpc
-from .const import DOMAIN, SERVICE_RESTART, CONF_HOST, CONF_USERNAME, CONF_PASSWORD, CONF_FORCE_TEXT
+from .const import (
+    DOMAIN, SERVICE_RESTART, SERVICE_PTZ_CONTROL,
+    SERVICE_MOVE_RELATIVE, SERVICE_MOVE_ABSOLUTE, SERVICE_GO_HOME,
+    CONF_HOST, CONF_USERNAME, CONF_PASSWORD, CONF_SCRIPT_PATH,
+    DEFAULT_SCRIPT_PATH, DEFAULT_SPEED,
+)
+from .dahua_cli import DahuaCli
 
 _LOGGER = logging.getLogger(__name__)
 
-CONFIG_SCHEMA = vol.Schema({
-    vol.Optional(DOMAIN): vol.Schema({
-        vol.Required(CONF_HOST): cv.string,
-        vol.Required(CONF_USERNAME): cv.string,
-        vol.Required(CONF_PASSWORD): cv.string,
-        vol.Optional(CONF_FORCE_TEXT, default=False): cv.boolean,
-    })
-}, extra=vol.ALLOW_EXTRA)
+PLATFORMS = []
 
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the Dahua PTZ component from configuration.yaml."""
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Настройка из configuration.yaml (опционально)."""
     if DOMAIN not in config:
         return True
 
-    # Check if already configured
+    # Если уже есть config entries, игнорируем YAML
     if hass.config_entries.async_entries(DOMAIN):
-        _LOGGER.warning("Config entry already exists, ignoring YAML configuration")
         return True
 
-    # Create config entry from YAML
+    # Создаём config entry из YAML
+    conf = config[DOMAIN]
     hass.async_create_task(
         hass.config_entries.flow.async_init(
             DOMAIN,
-            context={"source": config_entries.SOURCE_IMPORT},
-            data=config[DOMAIN],
+            context={"source": "import"},
+            data=conf,
         )
     )
     return True
 
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Dahua PTZ from a config entry."""
+    """Настройка из config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    # Initialize connection
-    if not await _init_connection(hass, entry):
+    cli = await _init_connection(hass, entry)
+    if cli is None:
         raise ConfigEntryNotReady
 
-    # Register services
+    hass.data[DOMAIN]["client"] = cli
+
     await _register_services(hass)
 
-    # Add update listener for config entry changes
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
+    _LOGGER.info("Dahua PTZ инициализирован: %s", entry.data[CONF_HOST])
     return True
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    if dahua := hass.data[DOMAIN].get("client"):
-        await dahua.close()
-    
+    """Выгрузка config entry."""
     hass.data[DOMAIN].pop("client", None)
     return True
 
+
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Update options."""
+    """Обновление опций."""
     await hass.config_entries.async_reload(entry.entry_id)
 
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
 
-async def _init_connection(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Initialize connection to Dahua camera."""
+async def _init_connection(hass: HomeAssistant, entry: ConfigEntry):
+    """Инициализация подключения."""
     config = entry.data
-    force_text = entry.options.get(CONF_FORCE_TEXT, False)
+    speed = entry.options.get("speed", DEFAULT_SPEED)
+    script_path = entry.options.get(
+        CONF_SCRIPT_PATH, config.get(CONF_SCRIPT_PATH, DEFAULT_SCRIPT_PATH)
+    )
 
-    dahua = DahuaRpc(
+    cli = DahuaCli(
         host=config[CONF_HOST],
         username=config[CONF_USERNAME],
         password=config[CONF_PASSWORD],
-        force_text=force_text
+        script_path=script_path,
+        speed=speed,
     )
 
-    try:
-        await dahua.login()
-        hass.data[DOMAIN]["client"] = dahua
-        return True
-    except Exception as e:
-        _LOGGER.error(f"Failed to connect to Dahua camera: {e}")
-        return False
+    # Проверяем подключение
+    status = hass.async_add_executor_job(cli.status)
+    status_result = await status
+    if status_result is None:
+        _LOGGER.error("Не удалось подключиться к камере: %s", config[CONF_HOST])
+        _LOGGER.error("CLI-скрипт: %s (существует: %s)", cli.script_path, os.path.isfile(cli.script_path))
+        return None
+
+    _LOGGER.info("Подключение к камере успешно: %s", status_result)
+    return cli
+
 
 async def _register_services(hass: HomeAssistant) -> None:
-    """Register services for Dahua PTZ."""
-    async def async_handle_ptz_control(call):
-        """Handle PTZ control service calls."""
-        if "client" not in hass.data[DOMAIN]:
-            _LOGGER.error("Dahua client not initialized")
-            return
+    """Регистрация сервисов."""
 
-        dahua = hass.data[DOMAIN]["client"]
+    async def async_handle_ptz_control(call: ServiceCall):
         action = call.data.get("action", "stop")
         code = call.data.get("code", "")
         arg1 = call.data.get("arg1", 0)
         arg2 = call.data.get("arg2", 0)
-        arg3 = call.data.get("arg3", 5)
-        
-        await dahua.ptz_control(action, code, arg1, arg2, arg3)
 
-    async def async_handle_restart(call):
-        """Handle restart service call."""
-        _LOGGER.info("Restarting Dahua PTZ integration")
+        cli = hass.data[DOMAIN].get("client")
+        if not cli:
+            _LOGGER.error("Клиент Dahua не инициализирован")
+            return
+
+        if code == "PositionABS":
+            await hass.async_add_executor_job(cli.move_absolute, arg1 / 10, arg2 / 10)
+        elif code == "Stop":
+            _LOGGER.info("PTZ stop (не требуется для PositionABS)")
+        else:
+            _LOGGER.warning("ptz_control: код '%s' не поддерживается, используйте move_relative", code)
+
+    async def async_handle_move_relative(call: ServiceCall):
+        direction = call.data.get("direction")
+        degrees = call.data.get("degrees")
+
+        cli = hass.data[DOMAIN].get("client")
+        if not cli:
+            _LOGGER.error("Клиент Dahua не инициализирован")
+            return
+
+        commands = {
+            "left": cli.move_left,
+            "right": cli.move_right,
+            "up": cli.move_up,
+            "down": cli.move_down,
+        }
+
+        func = commands.get(direction)
+        if func:
+            await hass.async_add_executor_job(func, degrees)
+        else:
+            _LOGGER.error("Неизвестное направление: %s", direction)
+
+    async def async_handle_move_absolute(call: ServiceCall):
+        pan = call.data.get("pan")
+        tilt = call.data.get("tilt")
+
+        cli = hass.data[DOMAIN].get("client")
+        if not cli:
+            _LOGGER.error("Клиент Dahua не инициализирован")
+            return
+
+        await hass.async_add_executor_job(cli.move_absolute, pan, tilt)
+
+    async def async_handle_go_home(call: ServiceCall):
+        cli = hass.data[DOMAIN].get("client")
+        if not cli:
+            _LOGGER.error("Клиент Dahua не инициализирован")
+            return
+
+        await hass.async_add_executor_job(cli.go_home)
+
+    async def async_handle_restart(call: ServiceCall):
+        _LOGGER.info("Перезагрузка интеграции Dahua PTZ")
         entry = next(iter(hass.config_entries.async_entries(DOMAIN)), None)
         if entry:
-            await async_reload_entry(hass, entry)
+            await hass.config_entries.async_reload(entry.entry_id)
 
     hass.services.async_register(
-        DOMAIN, "ptz_control", async_handle_ptz_control,
+        DOMAIN, SERVICE_PTZ_CONTROL, async_handle_ptz_control,
         schema=vol.Schema({
             vol.Optional("action"): vol.In(["start", "stop"]),
             vol.Optional("code"): cv.string,
@@ -129,12 +182,25 @@ async def _register_services(hass: HomeAssistant) -> None:
     )
 
     hass.services.async_register(
-        DOMAIN, SERVICE_RESTART, async_handle_restart
+        DOMAIN, SERVICE_MOVE_RELATIVE, async_handle_move_relative,
+        schema=vol.Schema({
+            vol.Required("direction"): vol.In(["left", "right", "up", "down"]),
+            vol.Required("degrees"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=360)),
+        })
     )
 
-    async def async_close(event):
-        """Close the session when HA stops."""
-        if "client" in hass.data[DOMAIN]:
-            await hass.data[DOMAIN]["client"].close()
+    hass.services.async_register(
+        DOMAIN, SERVICE_MOVE_ABSOLUTE, async_handle_move_absolute,
+        schema=vol.Schema({
+            vol.Required("pan"): vol.All(vol.Coerce(float), vol.Range(min=0, max=360)),
+            vol.Required("tilt"): vol.All(vol.Coerce(float), vol.Range(min=-90, max=90)),
+        })
+    )
 
-    hass.bus.async_listen_once("homeassistant_stop", async_close)
+    hass.services.async_register(
+        DOMAIN, SERVICE_GO_HOME, async_handle_go_home
+    )
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_RESTART, async_handle_restart
+    )
